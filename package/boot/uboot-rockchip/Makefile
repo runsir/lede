@@ -1,3 +1,4 @@
+
 #
 # This is free software, licensed under the GNU General Public License v2.
 # See /LICENSE for more information.
@@ -38,12 +39,26 @@ define U-Boot/nanopi-r2c-rk3328
     friendlyarm_nanopi-r2c
 endef
 
+define U-Boot/nanopi-r2c-plus-rk3328
+  $(U-Boot/rk3328/Default)
+  NAME:=NanoPi R2C Plus
+  BUILD_DEVICES:= \
+    friendlyarm_nanopi-r2c-plus
+endef
+
 define U-Boot/nanopi-r2s-rk3328
   $(U-Boot/rk3328/Default)
   NAME:=NanoPi R2S
   BUILD_DEVICES:= \
     friendlyarm_nanopi-r2s \
     friendlyarm_nanopi-neo3
+endef
+
+define U-Boot/nanopi-r2s-plus-rk3328
+  $(U-Boot/rk3328/Default)
+  NAME:=NanoPi R2S Plus
+  BUILD_DEVICES:= \
+    friendlyarm_nanopi-r2s-plus
 endef
 
 define U-Boot/orangepi-r1-plus-rk3328
@@ -175,7 +190,7 @@ define U-Boot/rk3566/Default
   BUILD_SUBTARGET:=armv8
   DEPENDS:=+PACKAGE_u-boot-$(1):rkbin-rk3566
   ATF:=rk3568_bl31_v1.44.elf
-  TPL:=rk3566_ddr_1056MHz_v1.21.bin
+  TPL:=rk3566_ddr_1056MHz_v1.23.bin
 endef
 
 define U-Boot/nanopi-r3s-rk3566
@@ -205,7 +220,7 @@ define U-Boot/rk3568/Default
   BUILD_SUBTARGET:=armv8
   DEPENDS:=+PACKAGE_u-boot-$(1):rkbin-rk3568
   ATF:=rk3568_bl31_v1.44.elf
-  TPL:=rk3568_ddr_1560MHz_v1.21.bin
+  TPL:=rk3568_ddr_1560MHz_v1.23.bin
 endef
 
 define U-Boot/bpi-r2-pro-rk3568
@@ -242,6 +257,13 @@ define U-Boot/generic-rk3568
     hinlink_opc-h69k \
     lyt_t68m \
     seewo_sv21
+endef
+
+define U-Boot/mmbox-anas3035-rk3568
+  $(U-Boot/rk3568/Default)
+  NAME:=MMBOX ANAS3035
+  BUILD_DEVICES:= \
+    mmbox_anas3035
 endef
 
 define U-Boot/nanopi-r5c-rk3568
@@ -298,8 +320,8 @@ endef
 define U-Boot/rk3588/Default
   BUILD_SUBTARGET:=armv8
   DEPENDS:=+PACKAGE_u-boot-$(1):rkbin-rk3588
-  ATF:=rk3588_bl31_v1.45.elf
-  TPL:=rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.16.bin
+  ATF:=rk3588_bl31_v1.47.elf
+  TPL:=rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.18.bin
 endef
 
 define U-Boot/generic-rk3588
@@ -355,6 +377,13 @@ define U-Boot/orangepi-5-rk3588s
     xunlong_orangepi-5
 endef
 
+define U-Boot/rock5a-rk3588s
+  $(U-Boot/rk3588/Default)
+  NAME:=ROCK 5A
+  BUILD_DEVICES:= \
+    radxa_rock-5a
+endef
+
 UBOOT_TARGETS := \
   nanopi-r3s-rk3566 \
   panther-x2-rk3566 \
@@ -363,6 +392,7 @@ UBOOT_TARGETS := \
   generic-rk3568 \
   fastrhino-r66s-rk3568 \
   fastrhino-r68s-rk3568 \
+  mmbox-anas3035-rk3568 \
   nanopi-r5c-rk3568 \
   nanopi-r5s-rk3568 \
   photonicat-rk3568 \
@@ -377,6 +407,7 @@ UBOOT_TARGETS := \
   nanopi-r6c-rk3588s \
   nanopi-r6s-rk3588s \
   orangepi-5-rk3588s \
+  rock5a-rk3588s \
   dlfr100-rk3399 \
   h3399pc-rk3399 \
   fine3399-rk3399 \
@@ -391,7 +422,9 @@ UBOOT_TARGETS := \
   guangmiao-g4c-rk3399 \
   xiaobao-nas-v1-rk3399 \
   nanopi-r2c-rk3328 \
+  nanopi-r2c-plus-rk3328 \
   nanopi-r2s-rk3328 \
+  nanopi-r2s-plus-rk3328 \
   orangepi-r1-plus-rk3328 \
   orangepi-r1-plus-lts-rk3328
 

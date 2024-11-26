@@ -439,7 +439,7 @@ define KernelPackage/phy-smsc
    SUBMENU:=$(NETWORK_DEVICES_MENU)
    TITLE:=SMSC PHY driver
    KCONFIG:=CONFIG_SMSC_PHY
-   DEPENDS:=+kmod-libphy +LINUX_6_6:kmod-lib-crc16
+   DEPENDS:=+kmod-libphy +(LINUX_6_6||LINUX_6_12):kmod-lib-crc16
    FILES:=$(LINUX_DIR)/drivers/net/phy/smsc.ko
    AUTOLOAD:=$(call AutoProbe,smsc)
 endef
@@ -465,6 +465,23 @@ define KernelPackage/phy-vitesse/description
 endef
 
 $(eval $(call KernelPackage,phy-vitesse))
+
+
+define KernelPackage/phy-airoha-en8811h
+  SUBMENU:=$(NETWORK_DEVICES_MENU)
+  TITLE:=Airoha EN8811H 2.5G Ethernet PHY
+  DEPENDS:=+en8811h-firmware +kmod-libphy
+  KCONFIG:=CONFIG_AIR_EN8811H_PHY
+  FILES:= \
+   $(LINUX_DIR)/drivers/net/phy/air_en8811h.ko
+  AUTOLOAD:=$(call AutoLoad,18,air_en8811h,1)
+endef
+
+define KernelPackage/phy-airoha-en8811h/description
+  Kernel modules for Airoha EN8811H 2.5G Ethernet PHY
+endef
+
+$(eval $(call KernelPackage,phy-airoha-en8811h))
 
 
 define KernelPackage/phy-aquantia
@@ -971,6 +988,35 @@ endef
 
 $(eval $(call KernelPackage,e1000e))
 
+define KernelPackage/libie
+  SUBMENU:=$(NETWORK_DEVICES_MENU)
+  TITLE:=Intel Ethernet library
+  DEPENDS:=@PCI_SUPPORT +kmod-i2c-core +kmod-i2c-algo-bit +kmod-ptp +kmod-hwmon-core
+  KCONFIG:=CONFIG_LIBIE
+  FILES:=$(LINUX_DIR)/drivers/net/ethernet/intel/libie/libie.ko
+  AUTOLOAD:=$(call AutoLoad,30,libie,1)
+endef
+
+define KernelPackage/libie/description
+ Kernel modules for libie (Intel Ethernet library) common library
+endef
+
+$(eval $(call KernelPackage,libie))
+
+define KernelPackage/libeth
+  SUBMENU:=$(NETWORK_DEVICES_MENU)
+  TITLE:=Intel Ethernet PHY library
+  DEPENDS:=@PCI_SUPPORT +kmod-i2c-core +kmod-i2c-algo-bit +kmod-ptp +kmod-hwmon-core
+  KCONFIG:=CONFIG_LIBIE
+  FILES:=$(LINUX_DIR)/drivers/net/ethernet/intel/libeth/libeth.ko
+  AUTOLOAD:=$(call AutoLoad,30,libeth,1)
+endef
+
+define KernelPackage/libeth/description
+ Kernel modules for libeth (Intel Ethernet library) common library
+endef
+
+$(eval $(call KernelPackage,libeth))
 
 define KernelPackage/igb
   SUBMENU:=$(NETWORK_DEVICES_MENU)
@@ -1049,7 +1095,7 @@ $(eval $(call KernelPackage,ixgbevf))
 define KernelPackage/i40e
   SUBMENU:=$(NETWORK_DEVICES_MENU)
   TITLE:=Intel(R) Ethernet Controller XL710 Family support
-  DEPENDS:=@PCI_SUPPORT +kmod-mdio +kmod-ptp +kmod-hwmon-core +kmod-libphy
+  DEPENDS:=@PCI_SUPPORT +kmod-mdio +kmod-ptp +kmod-hwmon-core +kmod-libphy +LINUX_6_12:kmod-libie
   KCONFIG:=CONFIG_I40E \
     CONFIG_I40E_VXLAN=n \
     CONFIG_I40E_HWMON=y \
@@ -1068,7 +1114,7 @@ $(eval $(call KernelPackage,i40e))
 define KernelPackage/iavf
   SUBMENU:=$(NETWORK_DEVICES_MENU)
   TITLE:=Intel(R) Ethernet Adaptive Virtual Function support
-  DEPENDS:=@PCI_SUPPORT
+  DEPENDS:=@PCI_SUPPORT +LINUX_6_12:kmod-libie +LINUX_6_12:kmod-libeth
   KCONFIG:= \
        CONFIG_I40EVF \
        CONFIG_IAVF
@@ -1511,7 +1557,7 @@ define KernelPackage/mlx4-core
 	CONFIG_MLX4_CORE=y \
 	CONFIG_MLX4_CORE_GEN2=y \
 	CONFIG_MLX4_DEBUG=n
-  AUTOLOAD:=$(call AutoProbe,mlx4_core mlx4_en)
+  AUTOLOAD:=$(call AutoLoad,36,mlx4_core mlx4_en,1)
 endef
 
 define KernelPackage/mlx4-core/description
@@ -1523,7 +1569,7 @@ $(eval $(call KernelPackage,mlx4-core))
 define KernelPackage/mlx5-core
   SUBMENU:=$(NETWORK_DEVICES_MENU)
   TITLE:=Mellanox ConnectX(R) mlx5 core Network Driver
-  DEPENDS:=@PCI_SUPPORT +kmod-ptp +kmod-mlxfw +LINUX_6_6:kmod-hwmon-core
+  DEPENDS:=@PCI_SUPPORT +kmod-ptp +kmod-mlxfw +(LINUX_6_6||LINUX_6_12):kmod-hwmon-core
   FILES:=$(LINUX_DIR)/drivers/net/ethernet/mellanox/mlx5/core/mlx5_core.ko
   KCONFIG:= CONFIG_MLX5_CORE \
 	CONFIG_MLX5_CORE_EN=y \
@@ -1542,7 +1588,7 @@ define KernelPackage/mlx5-core
 	CONFIG_MLX5_TC_CT=n \
 	CONFIG_MLX5_TLS=n \
 	CONFIG_MLX5_VFIO_PCI=n
-  AUTOLOAD:=$(call AutoProbe,mlx5_core)
+  AUTOLOAD:=$(call AutoLoad,36,mlx5_core,1)
 endef
 
 define KernelPackage/mlx5-core/description
@@ -1571,7 +1617,7 @@ $(eval $(call KernelPackage,mlxfw))
 define KernelPackage/mlxsw-core
   SUBMENU:=$(NETWORK_DEVICES_MENU)
   TITLE:=Mellanox Technologies Switch ASICs support
-  DEPENDS:=+kmod-mlxfw +kmod-hwmon-core
+  DEPENDS:=@TARGET_x86_64 +kmod-mlxfw +kmod-hwmon-core
   FILES:=$(LINUX_DIR)/drivers/net/ethernet/mellanox/mlxsw/mlxsw_core.ko
   KCONFIG:= \
   CONFIG_MLXSW_CORE \
@@ -1606,7 +1652,7 @@ $(eval $(call KernelPackage,mlxsw-i2c))
 define KernelPackage/mlxsw-minimal
   SUBMENU:=$(NETWORK_DEVICES_MENU)
   TITLE:=Mellanox Technologies minimal I2C support
-  DEPENDS:=+kmod-mlxsw-core +kmod-mlxsw-i2c
+  DEPENDS:=+kmod-mlxsw-i2c
   FILES:=$(LINUX_DIR)/drivers/net/ethernet/mellanox/mlxsw/mlxsw_minimal.ko
   KCONFIG:=CONFIG_MLXSW_MINIMAL
   AUTOLOAD:=$(call AutoProbe,mlxsw_minimal)
@@ -1640,20 +1686,14 @@ define KernelPackage/mlxsw-spectrum
   SUBMENU:=$(NETWORK_DEVICES_MENU)
   TITLE:=Mellanox Technologies Spectrum family support
   DEPENDS:= \
-  +kmod-mlxsw-core +kmod-mlxsw-pci +kmod-lib-objagg +kmod-lib-parman \
+  +kmod-mlxsw-pci +kmod-lib-objagg +kmod-lib-parman \
   +kmod-ip6-tunnel +kmod-ptp +kmod-sched-act-sample +kmod-vxlan
   FILES:=$(LINUX_DIR)/drivers/net/ethernet/mellanox/mlxsw/mlxsw_spectrum.ko
   KCONFIG:= \
   CONFIG_MLXSW_SPECTRUM \
-  CONFIG_NET_SWITCHDEV=y \
   CONFIG_MLXSW_SPECTRUM_DCB=y \
-  CONFIG_DCB=y \
-  CONFIG_AMD_XGBE_DCB=n \
-  CONFIG_IXGBE_DCB=n \
-  CONFIG_I40E_DCB=n \
-  CONFIG_QLCNIC_DCB=n \
-  CONFIG_FSL_DPAA2_ETH_DCB=n \
-  CONFIG_FSL_DPAA2_SWITCH=n
+  CONFIG_NET_SWITCHDEV=y \
+  CONFIG_DCB=y
   AUTOLOAD:=$(call AutoProbe,mlxsw_spectrum)
 endef
 
@@ -1750,7 +1790,7 @@ define KernelPackage/igc
   DEPENDS:=@PCI_SUPPORT +kmod-ptp
   KCONFIG:=CONFIG_IGC
   FILES:=$(LINUX_DIR)/drivers/net/ethernet/intel/igc/igc.ko
-  AUTOLOAD:=$(call AutoLoad,35,igc)
+  AUTOLOAD:=$(call AutoLoad,34,igc,1)
 endef
 
 define KernelPackage/igc/description
@@ -1816,7 +1856,7 @@ $(eval $(call KernelPackage,sfc-falcon))
 define KernelPackage/wwan
   SUBMENU:=$(NETWORK_DEVICES_MENU)
   TITLE:=WWAN Driver Core
-  DEPENDS:=@(LINUX_5_15||LINUX_6_1||LINUX_6_6)
+  DEPENDS:=@(LINUX_5_15||LINUX_6_1||LINUX_6_6||LINUX_6_12)
   KCONFIG:= \
   CONFIG_WWAN \
   CONFIG_WWAN_DEBUGFS=y@ge5.17
@@ -1882,7 +1922,7 @@ $(eval $(call KernelPackage,mhi-wwan-mbim))
 define KernelPackage/mtk-t7xx
   SUBMENU:=$(NETWORK_DEVICES_MENU)
   TITLE:=MediaTek T7xx 5G modem
-  DEPENDS:=@(LINUX_6_1||LINUX_6_6) @PCI_SUPPORT +kmod-wwan
+  DEPENDS:=@(LINUX_6_1||LINUX_6_6||LINUX_6_12) @PCI_SUPPORT +kmod-wwan
   KCONFIG:=CONFIG_MTK_T7XX
   FILES:=$(LINUX_DIR)/drivers/net/wwan/t7xx/mtk_t7xx.ko
   AUTOLOAD:=$(call AutoProbe,mtk_t7xx)
@@ -1930,7 +1970,7 @@ define KernelPackage/lan743x
   SUBMENU:=$(NETWORK_DEVICES_MENU)
   TITLE:=Microchip LAN743x PCI Express Gigabit Ethernet NIC
   DEPENDS:=@PCI_SUPPORT +kmod-ptp \
-	+!LINUX_5_4:kmod-mdio-devres +LINUX_6_6:kmod-fixed-phy
+	+!LINUX_5_4:kmod-mdio-devres +(LINUX_6_6||LINUX_6_12):kmod-fixed-phy
   KCONFIG:=CONFIG_LAN743X
   FILES:=$(LINUX_DIR)/drivers/net/ethernet/microchip/lan743x.ko
   AUTOLOAD:=$(call AutoProbe,lan743x)
