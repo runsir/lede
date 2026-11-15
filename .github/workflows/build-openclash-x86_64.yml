@@ -95,9 +95,17 @@ jobs:
           df -h /
 
       # ------------------------------------------------------------------ #
-      - name: Update feeds
+      - name: Update feeds with upstream OpenClash feed
         run: |
           set -eux
+          # 上游：https://github.com/vernesong/OpenClash
+          # feeds.conf 的顺序决定同名包谁生效：openclash 必须排在 luci 前面，
+          # 否则 Lean luci feed 里自带的同名副本会赢，上游 feed 就白加了。
+          sed -i '/^src-git openclash/d' feeds.conf.default
+          { echo "src-git openclash https://github.com/vernesong/OpenClash.git;${OPENCLASH_REF}"; cat feeds.conf.default; } > feeds.conf.new
+          mv feeds.conf.new feeds.conf.default
+          head -n 3 feeds.conf.default
+
           retry() {
             n=0
             until "$@"; do
@@ -112,34 +120,21 @@ jobs:
           }
           retry ./scripts/feeds update -a
           retry ./scripts/feeds install -a
-          echo "OpenClash 包目录："
-          ls -d package/feeds/*/luci-app-openclash || true
 
-      # ------------------------------------------------------------------ #
-      # 上游地址：https://github.com/vernesong/OpenClash
-      # Lean 的 luci feed 里有一份同名副本，feeds install 会把它链到
-      # package/feeds/luci/luci-app-openclash。这里改用上游源码：clone 下来后
-      # 把该符号链接改指向上游的 luci-app-openclash 目录。
-      - name: Use upstream OpenClash (vernesong/OpenClash)
-        run: |
-          set -eux
-          rm -rf feeds/openclash
-          n=0
-          until git clone --depth 1 --branch "${OPENCLASH_REF}" \
-                  https://github.com/vernesong/OpenClash.git feeds/openclash; do
-            n=$((n + 1))
-            if [ "$n" -ge 3 ]; then
-              echo "::error::git clone vernesong/OpenClash 失败（ref=${OPENCLASH_REF}）"
-              exit 1
+          # 不管 feeds 的解析顺序如何，统一保证 package/feeds 下只有上游这一份，
+          # 它指向 feeds/openclash/luci-app-openclash（feeds update 克隆的源码）。
+          for d in package/feeds/*/luci-app-openclash; do
+            if [ -e "$d" ] || [ -L "$d" ]; then
+              if [ "$d" != "package/feeds/openclash/luci-app-openclash" ]; then
+                echo "removing duplicate package link: $d"
+                rm -rf "$d"
+              fi
             fi
-            sleep 10
-            rm -rf feeds/openclash
           done
-          test -f feeds/openclash/luci-app-openclash/Makefile
-          rm -rf package/feeds/luci/luci-app-openclash
-          mkdir -p package/feeds/luci
-          ln -sfn ../../../feeds/openclash/luci-app-openclash package/feeds/luci/luci-app-openclash
-          ls -l package/feeds/luci/luci-app-openclash
+          mkdir -p package/feeds/openclash
+          rm -rf package/feeds/openclash/luci-app-openclash
+          ln -sfn ../../../feeds/openclash/luci-app-openclash package/feeds/openclash/luci-app-openclash
+          ls -ld package/feeds/*/luci-app-openclash || true
           grep -m1 '^PKG_VERSION' feeds/openclash/luci-app-openclash/Makefile
 
       # ------------------------------------------------------------------ #

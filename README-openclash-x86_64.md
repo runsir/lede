@@ -60,9 +60,10 @@ Clash Meta 内核（国内可能慢，可手动放到 `/etc/openclash/core/clash
 
 ## 说明 / 排错
 
-- OpenClash 源码来自上游 <https://github.com/vernesong/OpenClash>：workflow 会
-  clone 它，并把 Lean luci feed 里同名副本的符号链接（`package/feeds/luci/luci-app-openclash`）
-  改指向上游目录，这样既能用上游代码，也不会出现重复包。
+- OpenClash 通过 feeds 引入上游 <https://github.com/vernesong/OpenClash>：
+  workflow 会把 `src-git openclash https://github.com/vernesong/OpenClash.git;master`
+  插到 `feeds.conf.default` 的**最前面**（feeds 顺序决定同名包谁生效），并删掉
+  其它 feed 里可能残留的同名链接，保证编进去的是上游源码而不是 Lean 的镜像副本。
 - OpenClash 打包需要 luci-base 的 host 工具 `po2lmo`，workflow 会给它的
   `DEPENDS` 补上 `luci-base` 以保证编译顺序。
 - ruby 的 YJIT/ZJIT 会拖入 `rust/host`（上游标记 BROKEN），已显式关闭。
