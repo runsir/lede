@@ -17,6 +17,11 @@ run-name: OpenClash x86_64 (${{ github.ref_name }})
 
 on:
   workflow_dispatch:
+    inputs:
+      openclash_ref:
+        description: "OpenClash 分支或标签（默认 master）"
+        required: false
+        default: "master"
   push:
     tags:
       - "v*"
@@ -41,6 +46,7 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
       LAN_IP: "192.168.1.2"        # 旁路设备地址
       LAN_GW: "192.168.1.1"        # 主路由地址
+      OPENCLASH_REF: ${{ inputs.openclash_ref || 'master' }}
 
     steps:
       # ------------------------------------------------------------------ #
@@ -110,6 +116,33 @@ jobs:
           ls -d package/feeds/*/luci-app-openclash || true
 
       # ------------------------------------------------------------------ #
+      # 上游地址：https://github.com/vernesong/OpenClash
+      # Lean 的 luci feed 里有一份同名副本，feeds install 会把它链到
+      # package/feeds/luci/luci-app-openclash。这里改用上游源码：clone 下来后
+      # 把该符号链接改指向上游的 luci-app-openclash 目录。
+      - name: Use upstream OpenClash (vernesong/OpenClash)
+        run: |
+          set -eux
+          rm -rf feeds/openclash
+          n=0
+          until git clone --depth 1 --branch "${OPENCLASH_REF}" \
+                  https://github.com/vernesong/OpenClash.git feeds/openclash; do
+            n=$((n + 1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::git clone vernesong/OpenClash 失败（ref=${OPENCLASH_REF}）"
+              exit 1
+            fi
+            sleep 10
+            rm -rf feeds/openclash
+          done
+          test -f feeds/openclash/luci-app-openclash/Makefile
+          rm -rf package/feeds/luci/luci-app-openclash
+          mkdir -p package/feeds/luci
+          ln -sfn ../../../feeds/openclash/luci-app-openclash package/feeds/luci/luci-app-openclash
+          ls -l package/feeds/luci/luci-app-openclash
+          grep -m1 '^PKG_VERSION' feeds/openclash/luci-app-openclash/Makefile
+
+      # ------------------------------------------------------------------ #
       # OpenClash 的 Makefile 没有把 luci-base 写成依赖，但 Build/Prepare 需要
       # luci-base 的 host 工具 po2lmo。给它的 DEPENDS 补上 luci-base，保证
       # -j 并行编译时 po2lmo 已经生成（否则会偶发 "po2lmo: not found"）。
@@ -120,9 +153,14 @@ jobs:
           # ../../../../feeds/luci/applications/luci-app-openclash），所以不能用
           # find -type f（默认不跟随符号链接），用 shell glob 最稳。
           f=$(ls -d package/feeds/*/luci-app-openclash/Makefile 2>/dev/null | head -n1) || true
+          if [ -z "$f" ] && [ -f feeds/openclash/luci-app-openclash/Makefile ]; then
+            echo "::warning::手动把上游 OpenClash 链到 package/feeds/luci/"
+            mkdir -p package/feeds/luci
+            ln -sfn ../../../feeds/openclash/luci-app-openclash package/feeds/luci/luci-app-openclash
+            f=package/feeds/luci/luci-app-openclash/Makefile
+          fi
           if [ -z "$f" ] && [ -f feeds/luci/applications/luci-app-openclash/Makefile ]; then
-            # 兜底：feeds install 没把包链进来时，手动补一个和 feeds 一致的符号链接
-            echo "::warning::feeds install 未安装 luci-app-openclash，手动建立符号链接"
+            echo "::warning::上游 clone 不存在，退回 Lean luci feed 的副本"
             mkdir -p package/feeds/luci
             ln -sfn ../../../feeds/luci/applications/luci-app-openclash package/feeds/luci/luci-app-openclash
             f=package/feeds/luci/luci-app-openclash/Makefile
@@ -416,7 +454,7 @@ jobs:
           else
             echo "openclash: package not found" > build-info/openclash.txt
           fi
-          git -C feeds/luci log -1 --format='luci feed: %H %cd %s' >> build-info/openclash.txt
+          git -C feeds/openclash log -1 --format='openclash upstream: %H %cd %s' >> build-info/openclash.txt 2>/dev/null || true
           cd bin/targets/x86/64
           sha256sum *.img.gz *.manifest 2>/dev/null > SHA256SUMS || true
           ls -lh
