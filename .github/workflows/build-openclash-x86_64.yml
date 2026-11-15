@@ -149,10 +149,10 @@ jobs:
           # find -type f（默认不跟随符号链接），用 shell glob 最稳。
           f=$(ls -d package/feeds/*/luci-app-openclash/Makefile 2>/dev/null | head -n1) || true
           if [ -z "$f" ] && [ -f feeds/openclash/luci-app-openclash/Makefile ]; then
-            echo "::warning::手动把上游 OpenClash 链到 package/feeds/luci/"
-            mkdir -p package/feeds/luci
-            ln -sfn ../../../feeds/openclash/luci-app-openclash package/feeds/luci/luci-app-openclash
-            f=package/feeds/luci/luci-app-openclash/Makefile
+            echo "::warning::手动把上游 OpenClash 链到 package/feeds/openclash/"
+            mkdir -p package/feeds/openclash
+            ln -sfn ../../../feeds/openclash/luci-app-openclash package/feeds/openclash/luci-app-openclash
+            f=package/feeds/openclash/luci-app-openclash/Makefile
           fi
           if [ -z "$f" ] && [ -f feeds/luci/applications/luci-app-openclash/Makefile ]; then
             echo "::warning::上游 clone 不存在，退回 Lean luci feed 的副本"
@@ -161,7 +161,7 @@ jobs:
             f=package/feeds/luci/luci-app-openclash/Makefile
           fi
           if [ -z "$f" ]; then
-            echo "::error::没找到 luci-app-openclash/Makefile（Lean 的 luci feed 正常情况下自带这个包）"
+            echo "::error::没找到 luci-app-openclash/Makefile（openclash feed 应该提供它）"
             ls -la package/feeds || true
             for d in package/feeds/*/; do
               echo "== $d"
