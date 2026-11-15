@@ -1,0 +1,128 @@
+#!/bin/sh
+# ============================================================================
+# 首次开机：把固件配置成「旁路路由」(single-arm bypass)
+#
+#   LAN          192.168.1.2/24，网关/DNS 指向主路由 192.168.1.1
+#   DHCP         关闭（IPv4 / IPv6 / RA 全关，避免和主路由抢 DHCP）
+#   网口         所有物理网口桥接进 br-lan，随便插哪个口都能进后台
+#   WAN/WAN6     关闭（旁路模式不需要）
+#   防火墙       保持 firewall4 运行 —— OpenClash 的 nft 规则挂在 inet fw4 上，
+#                关掉防火墙代理会失效
+#
+# 本脚本由 /etc/uci-defaults 在首次启动时执行一次，执行后自动删除。
+# 想改默认网段：改下面的 LAN_IP / LAN_GW 后重新编译，或刷机后在 LuCI 里改。
+# ============================================================================
+
+LAN_IP="${LAN_IP:-192.168.1.2}"
+LAN_MASK="${LAN_MASK:-255.255.255.0}"
+LAN_GW="${LAN_GW:-192.168.1.1}"
+LAN_DNS="${LAN_DNS:-192.168.1.1}"
+
+log() {
+	echo "[openclash-bypass] $*"
+}
+
+# ---------------------------------------------------------------------------
+# 1. LAN：静态地址 + 主路由作为网关
+# ---------------------------------------------------------------------------
+uci -q set network.lan.proto='static'
+uci -q set network.lan.ipaddr="$LAN_IP"
+uci -q set network.lan.netmask="$LAN_MASK"
+uci -q set network.lan.gateway="$LAN_GW"
+uci -q set network.lan.delegate='0'
+uci -q delete network.lan.ip6assign          # 不要向主路由请求/下发 IPv6 前缀
+uci -q delete network.lan.dns
+uci -q add_list network.lan.dns="$LAN_DNS"
+
+# ---------------------------------------------------------------------------
+# 2. 把所有物理网口加进 br-lan（旁路设备对网口没有 WAN/LAN 之分）
+# ---------------------------------------------------------------------------
+ports=""
+for dev in /sys/class/net/*; do
+	name="${dev##*/}"
+	[ -e "$dev/device" ] || continue          # 只要真实网卡，跳过 lo/br-/veth/tun...
+	case "$name" in
+		eth*|en*) ;;
+		*) continue ;;
+	esac
+	ports="$ports $name"
+done
+ports="${ports# }"
+log "physical ports: ${ports:-<none>}"
+
+if [ -n "$ports" ]; then
+	br_idx=""
+	i=0
+	while [ "$i" -lt 16 ]; do
+		if [ "$(uci -q get "network.@device[$i].name")" = "br-lan" ]; then
+			br_idx="$i"
+			break
+		fi
+		i=$((i + 1))
+	done
+
+	if [ -n "$br_idx" ]; then
+		uci -q delete "network.@device[$br_idx].ports"
+		for p in $ports; do
+			uci -q add_list "network.@device[$br_idx].ports=$p"
+		done
+	else
+		# 理论上 x86 的 lan 一定是桥，这里只是兜底
+		uci -q set network.lan.device="${ports%% *}"
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+# 3. 关闭 WAN / WAN6（否则 eth1 会和 br-lan 抢同一个网口/同一网段）
+# ---------------------------------------------------------------------------
+if uci -q show network.wan >/dev/null 2>&1; then
+	uci -q set network.wan.proto='none'
+	uci -q set network.wan.auto='0'
+	uci -q delete network.wan.device
+fi
+if uci -q show network.wan6 >/dev/null 2>&1; then
+	uci -q set network.wan6.proto='none'
+	uci -q set network.wan6.auto='0'
+	uci -q delete network.wan6.device
+fi
+
+# ---------------------------------------------------------------------------
+# 4. 关闭 LAN 的 DHCP / RA（dnsmasq 仍然要跑，OpenClash 依赖它做 DNS）
+# ---------------------------------------------------------------------------
+if uci -q show dhcp.lan >/dev/null 2>&1; then
+	uci -q set dhcp.lan.ignore='1'
+	uci -q set dhcp.lan.dhcpv6='disabled'
+	uci -q set dhcp.lan.ra='disabled'
+	uci -q set dhcp.lan.ndp='disabled'
+fi
+
+# ---------------------------------------------------------------------------
+# 5. 基本系统设置：主机名 / 时区 / NTP
+# ---------------------------------------------------------------------------
+uci -q set system.@system[0].hostname='OpenClash'
+uci -q set system.@system[0].timezone='CST-8'
+uci -q set system.@system[0].zonename='Asia/Shanghai'
+if uci -q show system.ntp >/dev/null 2>&1; then
+	uci -q delete system.ntp.server
+	uci -q add_list system.ntp.server='ntp.aliyun.com'
+	uci -q add_list system.ntp.server='ntp.tencent.com'
+	uci -q add_list system.ntp.server='ntp.ntsc.ac.cn'
+fi
+
+# ---------------------------------------------------------------------------
+# 6. 默认 root 密码：password（和 Lean 官方固件一致；请第一时间修改！）
+#    生成命令：openssl passwd -1 -salt V4UetPzk password
+# ---------------------------------------------------------------------------
+if [ -f /etc/shadow ]; then
+	sed -i 's|^root:[^:]*:|root:$1$V4UetPzk$CYXluq4wUazHjmCDBCqXF.:|' /etc/shadow
+fi
+
+# ---------------------------------------------------------------------------
+# 7. 提交
+# ---------------------------------------------------------------------------
+uci -q commit network
+uci -q commit dhcp
+uci -q commit system
+
+log "done: LAN=$LAN_IP/$LAN_MASK gateway=$LAN_GW dns=$LAN_DNS, DHCP disabled"
+exit 0
