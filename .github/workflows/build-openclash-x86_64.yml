@@ -120,6 +120,13 @@ jobs:
           # ../../../../feeds/luci/applications/luci-app-openclash），所以不能用
           # find -type f（默认不跟随符号链接），用 shell glob 最稳。
           f=$(ls -d package/feeds/*/luci-app-openclash/Makefile 2>/dev/null | head -n1) || true
+          if [ -z "$f" ] && [ -f feeds/luci/applications/luci-app-openclash/Makefile ]; then
+            # 兜底：feeds install 没把包链进来时，手动补一个和 feeds 一致的符号链接
+            echo "::warning::feeds install 未安装 luci-app-openclash，手动建立符号链接"
+            mkdir -p package/feeds/luci
+            ln -sfn ../../../feeds/luci/applications/luci-app-openclash package/feeds/luci/luci-app-openclash
+            f=package/feeds/luci/luci-app-openclash/Makefile
+          fi
           if [ -z "$f" ]; then
             echo "::error::没找到 luci-app-openclash/Makefile（Lean 的 luci feed 正常情况下自带这个包）"
             ls -la package/feeds || true
