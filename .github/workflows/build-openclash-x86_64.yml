@@ -116,11 +116,17 @@ jobs:
       - name: Make OpenClash wait for luci-base host tools
         run: |
           set -eux
-          f=$(find package/feeds -maxdepth 4 -type f -path '*/luci-app-openclash/Makefile' | head -n1) || true
+          # 注意：feeds install 建的是符号链接（package/feeds/luci/luci-app-openclash ->
+          # ../../../../feeds/luci/applications/luci-app-openclash），所以不能用
+          # find -type f（默认不跟随符号链接），用 shell glob 最稳。
+          f=$(ls -d package/feeds/*/luci-app-openclash/Makefile 2>/dev/null | head -n1) || true
           if [ -z "$f" ]; then
             echo "::error::没找到 luci-app-openclash/Makefile（Lean 的 luci feed 正常情况下自带这个包）"
             ls -la package/feeds || true
-            find package/feeds -maxdepth 2 -type d | head -40 || true
+            for d in package/feeds/*/; do
+              echo "== $d"
+              ls -la "$d" 2>/dev/null | head -20 || true
+            done
             exit 1
           fi
           echo "OpenClash package: $f"
@@ -397,7 +403,7 @@ jobs:
           mkdir -p build-info
           cp .config build-info/config.txt
           git log -1 --format='source: %H %cd %s' > build-info/source.txt
-          pkg=$(find package/feeds -maxdepth 4 -type d -name luci-app-openclash | head -n1) || true
+          pkg=$(ls -d package/feeds/*/luci-app-openclash 2>/dev/null | head -n1) || true
           if [ -n "$pkg" ]; then
             grep -E '^PKG_VERSION:=' "$pkg/Makefile" > build-info/openclash.txt || true
           else
