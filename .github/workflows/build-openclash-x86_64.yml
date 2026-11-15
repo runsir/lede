@@ -1,0 +1,476 @@
+# 在 GitHub Actions 上编译「只带 OpenClash」的 x86_64 软路由固件
+#
+# 这是一个自包含的 workflow：不需要仓库里有其它文件，直接放在
+# .github/workflows/ 下即可。
+#
+# 关键点：
+#   * Lean 的 luci feed 里已经自带 luci-app-openclash（当前 0.48.002），
+#     所以不需要再额外拉 vernesong/OpenClash 的 feed。
+#   * 首次开机自动配置成旁路：LAN 192.168.1.2/24，网关/DNS 192.168.1.1，
+#     关闭 DHCP/RA，所有物理网口桥接进 br-lan。
+#
+# 触发：Actions 页面手动运行，或推送 v* 标签（自动建 Release）。
+
+name: Build OpenClash x86_64
+
+run-name: OpenClash x86_64 (${{ github.ref_name }})
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-openclash-x86-64-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    name: Build x86_64 firmware
+    runs-on: ubuntu-22.04          # 不要用 24.04：Lean 的 lede 在 22.04 上最稳
+    timeout-minutes: 350
+
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      LAN_IP: "192.168.1.2"        # 旁路设备地址
+      LAN_GW: "192.168.1.1"        # 主路由地址
+
+    steps:
+      # ------------------------------------------------------------------ #
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ------------------------------------------------------------------ #
+      - name: Free disk space
+        run: |
+          set -eux
+          df -h /
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost \
+            /opt/az \
+            /usr/lib/heroku \
+            /opt/microsoft \
+            /usr/share/swift
+          sudo docker image prune -af || true
+          sudo apt-get clean
+          df -h /
+
+      # ------------------------------------------------------------------ #
+      - name: Install build dependencies
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get -y install \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+            build-essential bzip2 ccache clang cmake cpio curl \
+            device-tree-compiler flex g++-multilib gawk gcc-multilib genisoimage \
+            gettext git gperf haveged help2man intltool libc6-dev-i386 \
+            libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+            libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev \
+            libpython3-dev libreadline-dev libssl-dev libtool lrzsz msmtp \
+            ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools \
+            python3-setuptools qemu-utils rsync scons squashfs-tools subversion \
+            swig texinfo uglifyjs unzip upx-ucl vim wget xmlto xxd zip zlib1g-dev \
+            zstd lz4
+          sudo apt-get clean
+          df -h /
+
+      # ------------------------------------------------------------------ #
+      - name: Update feeds
+        run: |
+          set -eux
+          retry() {
+            n=0
+            until "$@"; do
+              n=$((n + 1))
+              if [ "$n" -ge 3 ]; then
+                echo "::error::command failed after $n attempts: $*"
+                return 1
+              fi
+              echo "retry $n: $*"
+              sleep 10
+            done
+          }
+          retry ./scripts/feeds update -a
+          retry ./scripts/feeds install -a
+          echo "OpenClash 包目录："
+          ls -d package/feeds/*/luci-app-openclash || true
+
+      # ------------------------------------------------------------------ #
+      # OpenClash 的 Makefile 没有把 luci-base 写成依赖，但 Build/Prepare 需要
+      # luci-base 的 host 工具 po2lmo。给它的 DEPENDS 补上 luci-base，保证
+      # -j 并行编译时 po2lmo 已经生成（否则会偶发 "po2lmo: not found"）。
+      - name: Make OpenClash wait for luci-base host tools
+        run: |
+          set -eux
+          f=$(find package/feeds -maxdepth 4 -type f -path '*/luci-app-openclash/Makefile' | head -n1) || true
+          if [ -z "$f" ]; then
+            echo "::error::没找到 luci-app-openclash/Makefile（Lean 的 luci feed 正常情况下自带这个包）"
+            ls -la package/feeds || true
+            find package/feeds -maxdepth 2 -type d | head -40 || true
+            exit 1
+          fi
+          echo "OpenClash package: $f"
+          if grep -q 'DEPENDS:=.*luci-base' "$f"; then
+            echo "already depends on luci-base"
+          else
+            awk 'BEGIN { done = 0 }
+                 {
+                   if (!done && $0 ~ /^[[:space:]]*DEPENDS:=/) {
+                     sub(/DEPENDS:=/, "DEPENDS:=+luci-base ")
+                     done = 1
+                   }
+                   print
+                 }' "$f" > "$f.new"
+            mv "$f.new" "$f"
+          fi
+          grep -q 'DEPENDS:=.*luci-base' "$f" || {
+            echo "::error::failed to inject luci-base dependency into $f"
+            exit 1
+          }
+          grep -n -A2 'DEPENDS:=' "$f"
+
+      # ------------------------------------------------------------------ #
+      # Lean 的 .gitignore 忽略了 /files，但这里是在 runner 里临时创建 files/
+      # 然后编译，不涉及提交，所以可以正常作为 rootfs overlay 生效。
+      # zz- 前缀保证在其它 uci-defaults 之后执行。
+      - name: Install first-boot bypass defaults
+        run: |
+          set -eux
+          mkdir -p files/etc/uci-defaults
+          cat > files/etc/uci-defaults/zz-openclash-bypass <<'BYPASS'
+          #!/bin/sh
+          # 首次开机：把固件配置成「旁路路由」(single-arm bypass)
+          #
+          #   LAN        192.168.1.2/24，网关/DNS 指向主路由 192.168.1.1
+          #   DHCP       关闭（IPv4 / IPv6 / RA 全关，避免和主路由抢 DHCP）
+          #   网口       所有物理网口桥接进 br-lan，插哪个口都能进后台
+          #   WAN/WAN6   关闭（旁路不需要）
+          #   防火墙     保留 firewall4 —— OpenClash 的 nft 规则挂在 inet fw4 上
+          #
+          # 由 /etc/uci-defaults 在首次启动时执行一次，执行后自动删除。
+
+          LAN_IP="${LAN_IP:-@LAN_IP@}"
+          LAN_MASK="${LAN_MASK:-255.255.255.0}"
+          LAN_GW="${LAN_GW:-@LAN_GW@}"
+          LAN_DNS="${LAN_DNS:-$LAN_GW}"
+
+          log() {
+          	echo "[openclash-bypass] $*"
+          }
+
+          # 1. LAN：静态地址 + 主路由作为网关
+          uci -q set network.lan.proto='static'
+          uci -q set network.lan.ipaddr="$LAN_IP"
+          uci -q set network.lan.netmask="$LAN_MASK"
+          uci -q set network.lan.gateway="$LAN_GW"
+          uci -q set network.lan.delegate='0'
+          uci -q delete network.lan.ip6assign
+          uci -q delete network.lan.dns
+          uci -q add_list network.lan.dns="$LAN_DNS"
+
+          # 2. 把所有物理网口加进 br-lan（旁路设备对网口没有 WAN/LAN 之分）
+          ports=""
+          for dev in /sys/class/net/*; do
+          	name="${dev##*/}"
+          	[ -e "$dev/device" ] || continue
+          	case "$name" in
+          		eth*|en*) ;;
+          		*) continue ;;
+          	esac
+          	ports="$ports $name"
+          done
+          ports="${ports# }"
+          log "physical ports: ${ports:-<none>}"
+
+          if [ -n "$ports" ]; then
+          	br_idx=""
+          	i=0
+          	while [ "$i" -lt 16 ]; do
+          		if [ "$(uci -q get "network.@device[$i].name")" = "br-lan" ]; then
+          			br_idx="$i"
+          			break
+          		fi
+          		i=$((i + 1))
+          	done
+
+          	if [ -n "$br_idx" ]; then
+          		uci -q delete "network.@device[$br_idx].ports"
+          		for p in $ports; do
+          			uci -q add_list "network.@device[$br_idx].ports=$p"
+          		done
+          	else
+          		uci -q set network.lan.device="${ports%% *}"
+          	fi
+          fi
+
+          # 3. 关闭 WAN / WAN6（否则 eth1 会和 br-lan 抢同一个网口/同一网段）
+          if uci -q show network.wan >/dev/null 2>&1; then
+          	uci -q set network.wan.proto='none'
+          	uci -q set network.wan.auto='0'
+          	uci -q delete network.wan.device
+          fi
+          if uci -q show network.wan6 >/dev/null 2>&1; then
+          	uci -q set network.wan6.proto='none'
+          	uci -q set network.wan6.auto='0'
+          	uci -q delete network.wan6.device
+          fi
+
+          # 4. 关闭 LAN 的 DHCP / RA（dnsmasq 还要跑，OpenClash 依赖它做 DNS）
+          if uci -q show dhcp.lan >/dev/null 2>&1; then
+          	uci -q set dhcp.lan.ignore='1'
+          	uci -q set dhcp.lan.dhcpv6='disabled'
+          	uci -q set dhcp.lan.ra='disabled'
+          	uci -q set dhcp.lan.ndp='disabled'
+          fi
+
+          # 5. 基本系统设置
+          uci -q set system.@system[0].hostname='OpenClash'
+          uci -q set system.@system[0].timezone='CST-8'
+          uci -q set system.@system[0].zonename='Asia/Shanghai'
+          if uci -q show system.ntp >/dev/null 2>&1; then
+          	uci -q delete system.ntp.server
+          	uci -q add_list system.ntp.server='ntp.aliyun.com'
+          	uci -q add_list system.ntp.server='ntp.tencent.com'
+          	uci -q add_list system.ntp.server='ntp.ntsc.ac.cn'
+          fi
+
+          # 6. 默认 root 密码 password（与 Lean 官方一致，请尽快修改）
+          if [ -f /etc/shadow ]; then
+          	sed -i 's|^root:[^:]*:|root:$1$V4UetPzk$CYXluq4wUazHjmCDBCqXF.:|' /etc/shadow
+          fi
+
+          # 7. 提交
+          uci -q commit network
+          uci -q commit dhcp
+          uci -q commit system
+
+          log "done: LAN=$LAN_IP gateway=$LAN_GW dns=$LAN_DNS, DHCP disabled"
+          exit 0
+          BYPASS
+          sed -i "s|@LAN_IP@|${LAN_IP}|g; s|@LAN_GW@|${LAN_GW}|g" files/etc/uci-defaults/zz-openclash-bypass
+          chmod 0755 files/etc/uci-defaults/zz-openclash-bypass
+          sh -n files/etc/uci-defaults/zz-openclash-bypass
+          head -20 files/etc/uci-defaults/zz-openclash-bypass
+
+      # ------------------------------------------------------------------ #
+      - name: Generate .config
+        run: |
+          set -eux
+          cat > .config <<'CONFIG'
+          # x86/64 通用设备
+          CONFIG_TARGET_x86=y
+          CONFIG_TARGET_x86_64=y
+          CONFIG_TARGET_x86_64_DEVICE_generic=y
+
+          # squashfs + 1 GiB 根分区（约 800 MB 会成为 overlay），BIOS/UEFI 都出
+          CONFIG_TARGET_ROOTFS_SQUASHFS=y
+          CONFIG_TARGET_ROOTFS_PARTSIZE=1024
+          CONFIG_TARGET_IMAGES_GZIP=y
+
+          # Web 界面：LuCI + 中文 + design 主题 + ttyd 网页终端
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-base=y
+          CONFIG_PACKAGE_luci-compat=y
+          CONFIG_PACKAGE_luci-lua-runtime=y
+          CONFIG_PACKAGE_luci-theme-design=y
+          CONFIG_PACKAGE_luci-app-ttyd=y
+          CONFIG_LUCI_LANG_zh_Hans=y
+
+          # OpenClash（来自 Lean 的 luci feed）及其运行时依赖
+          CONFIG_PACKAGE_luci-app-openclash=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          CONFIG_PACKAGE_kmod-inet-diag=y
+          CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_dnsmasq-full=y
+          CONFIG_PACKAGE_dnsmasq_full_nftset=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_unzip=y
+          CONFIG_PACKAGE_bash=y
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_ca-bundle=y
+
+          # OpenClash 用 ruby 解析 YAML；关掉 JIT（会拖入 rust/host，官方标 BROKEN）
+          CONFIG_PACKAGE_ruby=y
+          CONFIG_PACKAGE_ruby-yaml=y
+          # CONFIG_RUBY_ENABLE_YJIT is not set
+          # CONFIG_RUBY_ENABLE_ZJIT is not set
+
+          # 只带 OpenClash：关掉 Lean 默认打包的其它插件
+          # CONFIG_PACKAGE_luci-app-ssr-plus is not set
+          # CONFIG_PACKAGE_luci-app-turboacc is not set
+          # CONFIG_PACKAGE_luci-app-upnp is not set
+          # CONFIG_PACKAGE_luci-app-ddns is not set
+          # CONFIG_PACKAGE_luci-app-autoreboot is not set
+          # CONFIG_PACKAGE_luci-app-arpbind is not set
+          # CONFIG_PACKAGE_luci-app-filetransfer is not set
+          # CONFIG_PACKAGE_luci-app-vsftpd is not set
+          # CONFIG_PACKAGE_luci-app-vlmcsd is not set
+          # CONFIG_PACKAGE_luci-app-accesscontrol is not set
+          # CONFIG_PACKAGE_luci-app-nlbwmon is not set
+          # CONFIG_PACKAGE_luci-app-wol is not set
+          # CONFIG_PACKAGE_ddns-scripts_aliyun is not set
+          # CONFIG_PACKAGE_ddns-scripts_dnspod is not set
+          # CONFIG_PACKAGE_default-settings is not set
+          CONFIG
+          make defconfig
+
+          echo "================ key options ================"
+          grep -E '^CONFIG_(TARGET_x86_64_DEVICE_generic|PACKAGE_(luci-app-openclash|luci-compat|luci-lua-runtime|luci-app-ttyd|luci-theme-design|dnsmasq-full|kmod-tun|kmod-nft-tproxy|kmod-inet-diag|ruby|ruby-yaml))=y$' .config || true
+
+          for p in \
+            luci-app-openclash \
+            luci-compat \
+            luci-lua-runtime \
+            dnsmasq-full \
+            kmod-tun \
+            kmod-nft-tproxy \
+            kmod-inet-diag \
+            ruby \
+            ruby-yaml; do
+            if ! grep -q "^CONFIG_PACKAGE_${p}=y$" .config; then
+              echo "::error::CONFIG_PACKAGE_${p} 没有被启用，请检查上面的 defconfig 输出"
+              exit 1
+            fi
+          done
+
+      # ------------------------------------------------------------------ #
+      - name: Download sources
+        run: |
+          set -eux
+          ok=0
+          for i in 1 2 3; do
+            if make -j"$(nproc)" download; then ok=1; break; fi
+            echo "download failed (attempt $i), retrying..."
+            sleep 15
+          done
+          [ "$ok" = "1" ] || { echo "::error::make download 连续失败，请重跑"; exit 1; }
+
+      # ------------------------------------------------------------------ #
+      - name: Compile firmware
+        run: |
+          set -o pipefail
+          if ! make -j"$(nproc)" 2>&1 | tee build.log; then
+            echo "::warning::并行编译失败，改用单线程重跑以输出可读的错误日志"
+            make -j1 V=s 2>&1 | tee -a build.log
+          fi
+
+      # ------------------------------------------------------------------ #
+      - name: Verify OpenClash is really in the image
+        run: |
+          set -eux
+          ls -lh bin/targets/x86/64/
+          manifest=$(ls bin/targets/x86/64/*.manifest 2>/dev/null | head -n1) || true
+          [ -n "$manifest" ] || { echo "::error::没有生成 manifest，镜像构建失败"; exit 1; }
+          echo "manifest: $manifest"
+          for p in luci-app-openclash ruby ruby-yaml kmod-tun kmod-nft-tproxy kmod-inet-diag dnsmasq-full; do
+            grep -q "^${p} " "$manifest" || {
+              echo "::error::${p} 没有出现在固件 manifest 中，固件不完整"
+              exit 1
+            }
+          done
+          for p in luci-app-ssr-plus luci-app-turboacc luci-app-upnp luci-app-ddns; do
+            if grep -q "^${p} " "$manifest"; then
+              echo "::error::${p} 不应该出现在「只带 OpenClash」的固件里"
+              exit 1
+            fi
+          done
+          grep -E '^(luci-app-openclash|ruby|ruby-yaml|kmod-tun|kmod-nft-tproxy|kmod-inet-diag) ' "$manifest"
+
+      # ------------------------------------------------------------------ #
+      - name: Collect build info
+        run: |
+          set -eux
+          mkdir -p build-info
+          cp .config build-info/config.txt
+          git log -1 --format='source: %H %cd %s' > build-info/source.txt
+          pkg=$(find package/feeds -maxdepth 4 -type d -name luci-app-openclash | head -n1) || true
+          if [ -n "$pkg" ]; then
+            grep -E '^PKG_VERSION:=' "$pkg/Makefile" > build-info/openclash.txt || true
+          else
+            echo "openclash: package not found" > build-info/openclash.txt
+          fi
+          git -C feeds/luci log -1 --format='luci feed: %H %cd %s' >> build-info/openclash.txt
+          cd bin/targets/x86/64
+          sha256sum *.img.gz *.manifest 2>/dev/null > SHA256SUMS || true
+          ls -lh
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclash-x86_64-firmware
+          path: |
+            bin/targets/x86/64/*.img.gz
+            bin/targets/x86/64/*.manifest
+            bin/targets/x86/64/*.buildinfo
+            bin/targets/x86/64/SHA256SUMS
+            build-info/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload ipk packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclash-x86_64-packages
+          path: bin/packages/x86_64/**/*.ipk
+          if-no-files-found: warn
+          retention-days: 15
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # ------------------------------------------------------------------ #
+      - name: Create GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            bin/targets/x86/64/*.img.gz
+            bin/targets/x86/64/*.manifest
+            bin/targets/x86/64/SHA256SUMS
+            build-info/*
+          body: |
+            x86_64 软路由固件（Lean's LEDE + OpenClash 0.48.x），旁路模式预配置。
+
+            * 默认 LAN：`192.168.1.2/24`，网关/DNS：`192.168.1.1`，DHCP 已关闭
+            * 后台：<http://192.168.1.2>，用户名 `root`，密码 `password`（首次登录请立刻修改）
+            * 刷写：BIOS 用 `combined.img.gz`，UEFI 用 `combined-efi.img.gz`
+
+      - name: Job summary
+        if: success()
+        run: |
+          {
+            echo "## OpenClash x86_64 编译完成"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 源码 commit | \`$(git rev-parse --short HEAD)\` |"
+            echo "| OpenClash | \`$(grep -m1 '^PKG_VERSION:=' package/feeds/*/luci-app-openclash/Makefile | cut -d= -f2)\` |"
+            echo "| 默认后台 | http://192.168.1.2 （root / password） |"
+            echo ""
+            echo "### 产物"
+            echo '```'
+            ls -lh bin/targets/x86/64/*.img.gz
+            echo '```'
+            echo ""
+            echo "BIOS 用 \`*-combined.img.gz\`，UEFI 用 \`*-combined-efi.img.gz\`。"
+          } >> "$GITHUB_STEP_SUMMARY"
