@@ -7,7 +7,7 @@
 ## 固件内容
 
 - LuCI + 中文 + design 主题 + ttyd 网页终端
-- **OpenClash**（Lean 的 luci feed 自带，当前 0.48.002）+ ruby 运行时
+- **OpenClash**（上游 <https://github.com/vernesong/OpenClash>，当前 0.48.002）+ ruby 运行时
 - dnsmasq-full(nftset)、kmod-nft-tproxy、kmod-tun、kmod-inet-diag
 - 不含 ssr-plus、passwall、turboacc、UPnP、DDNS、Docker、Samba 等
 
@@ -25,7 +25,8 @@
 2. 如果仓库里还有旧的 `uild-openclash-x86_64.yml`（少了一个 b）或
    `openclash-x86_64.tar.gz`，删掉，避免混淆。
 3. 仓库 **Actions** 页面首次使用需点一下启用（fork 默认禁用 workflow）。
-4. 手动 **Run workflow**；或推送 `v*` 标签自动编译并发 Release。
+4. 手动 **Run workflow**（可填 `openclash_ref` 固定 OpenClash 分支/标签，默认 `master`）；
+   或推送 `v*` 标签自动编译并发 Release。
 5. 编译约 **2～3 小时**（4 核 Runner）。产物在 Actions → Artifacts：
    `openclash-x86_64-firmware`（镜像）、`openclash-x86_64-packages`（ipk）。
 
@@ -59,9 +60,9 @@ Clash Meta 内核（国内可能慢，可手动放到 `/etc/openclash/core/clash
 
 ## 说明 / 排错
 
-- 本 workflow 使用 **Lean luci feed 自带的 OpenClash**，不再额外拉
-  `vernesong/OpenClash` feed（两者包名相同，先装的 luci 版本会胜出，之前就是因为
-  路径写成了 `package/feeds/openclash/...` 才报 `No such file or directory`）。
+- OpenClash 源码来自上游 <https://github.com/vernesong/OpenClash>：workflow 会
+  clone 它，并把 Lean luci feed 里同名副本的符号链接（`package/feeds/luci/luci-app-openclash`）
+  改指向上游目录，这样既能用上游代码，也不会出现重复包。
 - OpenClash 打包需要 luci-base 的 host 工具 `po2lmo`，workflow 会给它的
   `DEPENDS` 补上 `luci-base` 以保证编译顺序。
 - ruby 的 YJIT/ZJIT 会拖入 `rust/host`（上游标记 BROKEN），已显式关闭。
