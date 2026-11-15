@@ -4,8 +4,8 @@
 # .github/workflows/ 下即可。
 #
 # 关键点：
-#   * Lean 的 luci feed 里已经自带 luci-app-openclash（当前 0.48.002），
-#     所以不需要再额外拉 vernesong/OpenClash 的 feed。
+#   * OpenClash 源码来自上游 https://github.com/vernesong/OpenClash：
+#     clone 后替换 Lean luci feed 里同名副本的符号链接（当前两者都是 0.48.002）。
 #   * 首次开机自动配置成旁路：LAN 192.168.1.2/24，网关/DNS 192.168.1.1，
 #     关闭 DHCP/RA，所有物理网口桥接进 br-lan。
 #
